@@ -5,12 +5,12 @@
 #include "eventbuf.c"
 
 struct eventbuf *event_buffer;
+int event_buffer_active = 0;
+int events_per_prod_count;
 
 sem_t *producer_sem;
 sem_t *consumer_sem;
-sem_t *event_buffer_sem;
-
-int events_per_prod_count;
+sem_t *event_buffer_mutex;
 
 
 sem_t *sem_open_temp(const char *name, int value) {
@@ -26,37 +26,47 @@ sem_t *sem_open_temp(const char *name, int value) {
     return sem;
 }
 
-void *producer_func(int *pr_thread_id) {
+
+void *producer_func(void *arg) {
+    int *pr_thread_id = arg;
+
     for (int i = 0; i < events_per_prod_count; i++) {
         int event_added = 100 * *pr_thread_id + i;
         sem_wait(producer_sem);
-        sem_wait(event_buffer_sem);
+        sem_wait(event_buffer_mutex);
 
         printf("P%d: adding event %d\n", *pr_thread_id, event_added);
         eventbuf_add(event_buffer, event_added);
 
-        sem_post(event_buffer_sem);
+        sem_post(event_buffer_mutex);
         sem_post(consumer_sem);
     }
     printf("P%d: exiting\n", *pr_thread_id);
+
+    return NULL;
 }
 
-void *consumer_func(int *c_thread_id) {
-    for (int i = 0; i < 50; i++) { // TODO potentially remove the i<50 case, that's just to prevent infinite loop
+
+void *consumer_func(void *arg) {
+    int *c_thread_id = arg;
+
+    for (int i = 0; event_buffer_active; i++) {
         sem_wait(consumer_sem);
-        sem_wait(event_buffer_sem);
+        sem_wait(event_buffer_mutex);
 
         if (eventbuf_empty(event_buffer)) {
-            sem_post(event_buffer_sem);
+            sem_post(event_buffer_mutex);
             printf("C%d: exiting\n", *c_thread_id);
-            return;
+            return NULL;
         }
         int event_gotten = eventbuf_get(event_buffer);
         printf("C%d: got event %d\n", *c_thread_id, event_gotten);
 
-        sem_post(event_buffer_sem);
+        sem_post(event_buffer_mutex);
         sem_post(producer_sem);
     }
+    printf("C%d: exiting\n", *c_thread_id);
+    return NULL;
 }
 
 
@@ -71,10 +81,15 @@ int main(int argc, char *argv[]) {
     int queue_lim = atoi(argv[4]);
 
     event_buffer = eventbuf_create();
+    event_buffer_active = 1;
 
     producer_sem = sem_open_temp("producer_semaphore", queue_lim);
     consumer_sem = sem_open_temp("consumer_semaphore", 0);
-    event_buffer_sem = sem_open_temp("event_buffer_semaphore", 1);
+    event_buffer_mutex = sem_open_temp("event_buffer_mutex", 1);
+    
+    sem_unlink("producer_semaphore");
+    sem_unlink("consumer_semaphore");
+    sem_unlink("event_buffer_mutex");
 
     pthread_t *pr_thread = calloc(producer_count, sizeof *pr_thread);
     int *pr_thread_id = calloc(producer_count, sizeof *pr_thread_id);
@@ -83,7 +98,6 @@ int main(int argc, char *argv[]) {
         pr_thread_id[i] = i;
         pthread_create(pr_thread + i, NULL, producer_func, pr_thread_id + i);
     }
-
     pthread_t *c_thread = calloc(consumer_count, sizeof *c_thread);
     int *c_thread_id = calloc(consumer_count, sizeof *c_thread_id);
 
@@ -91,11 +105,10 @@ int main(int argc, char *argv[]) {
         c_thread_id[i] = i;
         pthread_create(c_thread + i, NULL, consumer_func, c_thread_id + i);
     }
-
     for (int i = 0; i < producer_count; i++)
         pthread_join(pr_thread[i], NULL);
 
-    // TODO: sem_unlink?
+    event_buffer_active = 0;
     
     for (int i = 0; i < consumer_count; i++)
         sem_post(consumer_sem);
