@@ -5,7 +5,7 @@
 #include "eventbuf.c"
 
 struct eventbuf *event_buffer;
-int event_buffer_active = 0;
+// int event_buffer_active = 0; // changed based on feedback
 int events_per_prod_count;
 
 sem_t *producer_sem;
@@ -50,7 +50,8 @@ void *producer_func(void *arg) {
 void *consumer_func(void *arg) {
     int *c_thread_id = arg;
 
-    for (int i = 0; event_buffer_active; i++) {
+    // for (int i = 0; event_buffer_active; i++) { // changed based on feedback
+    while(1) {
         sem_wait(consumer_sem);
         sem_wait(event_buffer_mutex);
 
@@ -81,7 +82,7 @@ int main(int argc, char *argv[]) {
     int queue_lim = atoi(argv[4]);
 
     event_buffer = eventbuf_create();
-    event_buffer_active = 1;
+    // event_buffer_active = 1; // changed based on feedback
 
     producer_sem = sem_open_temp("producer_semaphore", queue_lim);
     consumer_sem = sem_open_temp("consumer_semaphore", 0);
@@ -108,7 +109,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < producer_count; i++)
         pthread_join(pr_thread[i], NULL);
 
-    event_buffer_active = 0;
+    // event_buffer_active = 0; // changed based on feedback
     
     for (int i = 0; i < consumer_count; i++)
         sem_post(consumer_sem);
